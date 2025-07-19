@@ -1,0 +1,65 @@
+
+var roi = ee.FeatureCollection("")
+  .filter(ee.Filter.eq('', ''));
+
+var startDate = '2020-07-01';
+var endDate = '2023-10-31';
+
+
+var s2 = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+  .filterDate(startDate, endDate)
+  .filterBounds(roi)
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30)); 
+
+
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+  
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+  
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+      .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+  
+  return image.updateMask(mask)
+    .divide(10000)
+    .copyProperties(image, ['system:time_start']);
+}
+
+
+var s2_cloudFree = s2.map(maskS2clouds);
+
+
+function addNDVI(image) {
+  var ndvi = image.normalizedDifference(['B8', 'B4']).rename('NDVI');
+  return image.addBands(ndvi);
+}
+
+
+var s2_ndvi = s2_cloudFree.map(addNDVI);
+
+
+var ndviComposite = s2_ndvi.select('NDVI').median().clip(roi);
+
+
+var ndviVis = {
+  min: 0.0,
+  max: 1.0,
+  palette: ['red', 'yellow', 'green']
+};
+
+
+Map.centerObject(roi, 6);
+Map.addLayer(roi, {}, 'region');
+Map.addLayer(ndviComposite, ndviVis, 'NDVI');
+
+
+Export.image.toDrive({
+  image: ndviComposite,
+  description: 'Sentinel2_NDVI_2020',
+  scale: 10,
+  region: roi,
+  maxPixels: 1e13
+});
